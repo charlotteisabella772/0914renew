@@ -9,24 +9,38 @@ jobs:
   renew:
     runs-on: ubuntu-latest
     steps:
-      - name: Send Renewal Request
+      - name: Auto Renew Server
         run: |
           COOKIE_STR="${{ secrets.PANEL_COOKIE }}"
-          
-          # 提取 XSRF-TOKEN
-          XSRF_VAL=$(echo "$COOKIE_STR" | grep -oP 'XSRF-TOKEN=\K[^;]+')
-          XSRF_VAL=$(echo "$XSRF_VAL" | python3 -c "import sys, urllib.parse; print(urllib.parse.unquote(sys.stdin.read().strip()))")
-          
-          echo "Extracted XSRF token successfully."
-
-          # 使用临时文件保存返回的响应内容以便排查
+          COOKIE_JAR=$(mktemp)
           RESPONSE_FILE=$(mktemp)
           
+          echo "1. 正在初始化并访问面板获取最新会话..."
+          # 先通过 GET 请求访问面板主页，利用 Cookie Jar 自动接收并更新服务器下发的最新 Cookie 及 XSRF-TOKEN
+          curl -s -c "$COOKIE_JAR" -b "$COOKIE_STR" \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+            "https://panel.host-ship.com/" > /dev/null
+
+          # 从更新后的 Cookie 文件中提取出最新的 XSRF-TOKEN
+          # Laravel 默认会将 XSRF-TOKEN 保存在 Cookie 中，我们需要进行 URL 解码
+          RAW_TOKEN=$(grep -i "XSRF-TOKEN" "$COOKIE_JAR" | awk '{print $NF}')
+          XSRF_VAL=$(python3 -c "import urllib.parse; print(urllib.parse.unquote('$RAW_TOKEN'))")
+          
+          if [ -z "$XSRF_VAL" ]; then
+            echo "错误: 无法从会话中提取 XSRF-TOKEN，可能 Cookie 已完全失效。"
+            exit 1
+          fi
+          
+          echo "XSRF Token 获取成功，正在发送续期请求..."
+
+          # 2. 发送带最新动态凭证的 POST 续期请求
           HTTP_CODE=$(curl -s -o "$RESPONSE_FILE" -w "%{http_code}" \
             -X POST \
+            -b "$COOKIE_JAR" \
             -H "Cookie: $COOKIE_STR" \
             -H "X-XSRF-TOKEN: $XSRF_VAL" \
-            -H "Referer: https://panel.host-ship.com/" \
+            -H "X-Requested-With: XMLHttpRequest" \
+            -H "Referer: https://panel.host-ship.com/server/ff009996-6e0b-4023-a0f2-f8bb3c15b3e0" \
             -H "Content-Type: application/json" \
             "https://panel.host-ship.com/api/client/servers/ff009996-6e0b-4023-a0f2-f8bb3c15b3e0/renew")
           
