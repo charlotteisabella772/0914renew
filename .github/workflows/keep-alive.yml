@@ -2,9 +2,8 @@ name: Host-Ship Auto Renew
 
 on:
   schedule:
-    # 每天北京时间中午 12:00 运行一次 (UTC 4:00)
     - cron: '0 4 * * *'
-  workflow_dispatch: # 允许你手动点击按钮测试
+  workflow_dispatch:
 
 jobs:
   renew:
@@ -12,31 +11,33 @@ jobs:
     steps:
       - name: Send Renewal Request
         run: |
-          # 1. 获取 GitHub Secrets 中保存的完整 Cookie 字符串
           COOKIE_STR="${{ secrets.PANEL_COOKIE }}"
           
-          # 2. 从 Cookie 字符串中自动提取出 XSRF-TOKEN 的值
+          # 提取 XSRF-TOKEN
           XSRF_VAL=$(echo "$COOKIE_STR" | grep -oP 'XSRF-TOKEN=\K[^;]+')
-          
-          # 3. 对 URL 编码的 Token 进行解码
           XSRF_VAL=$(echo "$XSRF_VAL" | python3 -c "import sys, urllib.parse; print(urllib.parse.unquote(sys.stdin.read().strip()))")
           
           echo "Extracted XSRF token successfully."
 
-          # 4. 发送带有完整 Cookie 和 X-XSRF-TOKEN 请求头的续期 POST 请求
-          # 请将下方网址中的“你的服务器ID”替换为真实的数据
-          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+          # 使用临时文件保存返回的响应内容以便排查
+          RESPONSE_FILE=$(mktemp)
+          
+          HTTP_CODE=$(curl -s -o "$RESPONSE_FILE" -w "%{http_code}" \
             -X POST \
             -H "Cookie: $COOKIE_STR" \
             -H "X-XSRF-TOKEN: $XSRF_VAL" \
             -H "Referer: https://panel.host-ship.com/" \
+            -H "Content-Type: application/json" \
             "https://panel.host-ship.com/api/client/servers/ff009996-6e0b-4023-a0f2-f8bb3c15b3e0/renew")
           
-          echo "HTTP Response Code: $RESPONSE"
+          echo "HTTP Response Code: $HTTP_CODE"
+          echo "--- Response Body ---"
+          cat "$RESPONSE_FILE"
+          echo "---------------------"
           
-          if [ "$RESPONSE" -eq 200 ] || [ "$RESPONSE" -eq 204 ] || [ "$RESPONSE" -eq 302 ]; then
+          if [ "$HTTP_CODE" -eq 200 ] || [ "$HTTP_CODE" -eq 204 ] || [ "$HTTP_CODE" -eq 302 ]; then
             echo "Renewal request sent successfully!"
           else
-            echo "Renewal might have failed or session expired, response code: $RESPONSE"
+            echo "Error: Renewal failed with code $HTTP_CODE"
             exit 1
           fi
